@@ -4,6 +4,8 @@ package com.weatherconnect.client;
 import java.net.http.HttpClient;
 import java.time.Duration;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -19,19 +21,20 @@ import com.weatherconnect.exception.CityNotFoundException;
 @Component
 public class WeatherApiClient {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(WeatherApiClient.class);
+
     private final RestClient restClient;
 
     public WeatherApiClient() {
-        // Maximum time allowed to establish a connection.
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(3))
                 .build();
 
-        // Maximum time allowed for an individual HTTP request.
         JdkClientHttpRequestFactory requestFactory =
                 new JdkClientHttpRequestFactory(httpClient);
 
-        requestFactory.setReadTimeout(Duration.ofSeconds(5));
+        requestFactory.setReadTimeout(Duration.ofSeconds(10));
 
         this.restClient = RestClient.builder()
                 .requestFactory(requestFactory)
@@ -40,7 +43,6 @@ public class WeatherApiClient {
 
     public WeatherSummary getWeatherByCity(String city) {
 
-        // 1. Build the geocoding API URL.
         String geocodingUrl = UriComponentsBuilder
                 .fromUriString(
                         "https://geocoding-api.open-meteo.com/v1/search")
@@ -51,13 +53,23 @@ public class WeatherApiClient {
                 .encode()
                 .toUriString();
 
-        // 2. Call the geocoding API and deserialize its JSON.
-        GeocodingResponse geocodingResponse = restClient.get()
-                .uri(geocodingUrl)
-                .retrieve()
-                .body(GeocodingResponse.class);
+        log.info("Starting geocoding request for city: {}", city);
 
-        // 3. Handle a city that was not found.
+        GeocodingResponse geocodingResponse;
+
+        try {
+            geocodingResponse = restClient.get()
+                    .uri(geocodingUrl)
+                    .retrieve()
+                    .body(GeocodingResponse.class);
+
+            log.info("Geocoding response received for city: {}", city);
+
+        } catch (Exception ex) {
+            log.error("Geocoding request failed for city: {}", city, ex);
+            throw ex;
+        }
+
         if (geocodingResponse == null
                 || geocodingResponse.results() == null
                 || geocodingResponse.results().isEmpty()) {
@@ -66,7 +78,6 @@ public class WeatherApiClient {
 
         LocationResult location = geocodingResponse.results().get(0);
 
-        // 4. Build the forecast API URL.
         String forecastUrl = UriComponentsBuilder
                 .fromUriString(
                         "https://api.open-meteo.com/v1/forecast")
@@ -78,13 +89,23 @@ public class WeatherApiClient {
                 .encode()
                 .toUriString();
 
-        // 5. Call the forecast API and deserialize its JSON.
-        ForecastResponse forecastResponse = restClient.get()
-                .uri(forecastUrl)
-                .retrieve()
-                .body(ForecastResponse.class);
+        log.info("Starting forecast request for city: {}", city);
 
-        // 6. Validate the forecast response.
+        ForecastResponse forecastResponse;
+
+        try {
+            forecastResponse = restClient.get()
+                    .uri(forecastUrl)
+                    .retrieve()
+                    .body(ForecastResponse.class);
+
+            log.info("Forecast response received for city: {}", city);
+
+        } catch (Exception ex) {
+            log.error("Forecast request failed for city: {}", city, ex);
+            throw ex;
+        }
+
         if (forecastResponse == null
                 || forecastResponse.current() == null) {
             throw new IllegalStateException(
@@ -93,7 +114,6 @@ public class WeatherApiClient {
 
         CurrentWeather current = forecastResponse.current();
 
-        // 7. Return the structured application response.
         return new WeatherSummary(
                 location.name(),
                 location.country(),
