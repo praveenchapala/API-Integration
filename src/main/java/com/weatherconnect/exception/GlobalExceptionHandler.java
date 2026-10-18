@@ -2,6 +2,7 @@
 package com.weatherconnect.exception;
 
 import java.net.http.HttpTimeoutException;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
@@ -28,7 +29,7 @@ public class GlobalExceptionHandler {
                 exception.getMessage());
     }
 
-    // Handle invalid requests, such as missing city names.
+    // Handle invalid requests.
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, String>> handleBadRequest(
             ResponseStatusException exception) {
@@ -52,7 +53,7 @@ public class GlobalExceptionHandler {
                         : exception.getReason());
     }
 
-    // Handle HTTP 429: external weather API rate limit exceeded.
+    // Handle HTTP 429: external API rate limit.
     @ExceptionHandler(HttpClientErrorException.TooManyRequests.class)
     public ResponseEntity<Map<String, String>> handleRateLimit(
             HttpClientErrorException.TooManyRequests exception) {
@@ -72,13 +73,13 @@ public class GlobalExceptionHandler {
             return buildError(
                     HttpStatus.GATEWAY_TIMEOUT,
                     "WEATHER_SERVICE_TIMEOUT",
-                    "The weather service took too long to respond. Please try again.");
+                    "The weather service connection timed out. Please try again later.");
         }
 
         return buildError(
                 HttpStatus.BAD_GATEWAY,
                 "WEATHER_SERVICE_UNAVAILABLE",
-                "The external weather service is currently unavailable.");
+                "The external weather service is currently unreachable.");
     }
 
     // Handle other external HTTP client failures.
@@ -111,7 +112,7 @@ public class GlobalExceptionHandler {
         return buildError(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "INTERNAL_SERVER_ERROR",
-                "An unexpected error occurred. Please try again later.");
+                "An unexpected server error occurred. Please try again later.");
     }
 
     private ResponseEntity<Map<String, String>> buildError(
@@ -133,6 +134,18 @@ public class GlobalExceptionHandler {
             if (current instanceof HttpTimeoutException
                     || current instanceof TimeoutException) {
                 return true;
+            }
+
+            String message = current.getMessage();
+
+            if (message != null) {
+                String normalizedMessage =
+                        message.toLowerCase(Locale.ROOT);
+
+                if (normalizedMessage.contains("timed out")
+                        || normalizedMessage.contains("timeout")) {
+                    return true;
+                }
             }
 
             current = current.getCause();
