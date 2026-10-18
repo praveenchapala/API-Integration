@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
@@ -49,6 +50,17 @@ public class GlobalExceptionHandler {
                 exception.getReason() == null
                         ? "The request could not be processed."
                         : exception.getReason());
+    }
+
+    // Handle HTTP 429: external weather API rate limit exceeded.
+    @ExceptionHandler(HttpClientErrorException.TooManyRequests.class)
+    public ResponseEntity<Map<String, String>> handleRateLimit(
+            HttpClientErrorException.TooManyRequests exception) {
+
+        return buildError(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "WEATHER_API_RATE_LIMIT",
+                "The weather provider's request limit has been reached. Please try again later.");
     }
 
     // Handle connection failures and timeouts.
