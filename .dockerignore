@@ -1,0 +1,5 @@
+﻿.git
+.gitignore
+target/
+weatherconnect-frontend/node_modules/
+weatherconnect-frontend/dist/
