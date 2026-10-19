@@ -1,14 +1,20 @@
 
 package com.weatherconnect.client;
 
+import java.io.IOException;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
 import java.net.http.HttpClient;
 import java.time.Duration;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import com.weatherconnect.dto.CurrentWeather;
@@ -24,11 +30,13 @@ public class WeatherApiClient {
     private static final Logger log =
             LoggerFactory.getLogger(WeatherApiClient.class);
 
+    private static final int MAX_ATTEMPTS = 2;
+
     private final RestClient restClient;
 
     public WeatherApiClient() {
         HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(3))
+                .connectTimeout(Duration.ofSeconds(10))
                 .build();
 
         JdkClientHttpRequestFactory requestFactory =
@@ -55,20 +63,14 @@ public class WeatherApiClient {
 
         log.info("Starting geocoding request for city: {}", city);
 
-        GeocodingResponse geocodingResponse;
-
-        try {
-            geocodingResponse = restClient.get()
-                    .uri(geocodingUrl)
-                    .retrieve()
-                    .body(GeocodingResponse.class);
-
-            log.info("Geocoding response received for city: {}", city);
-
-        } catch (Exception ex) {
-            log.error("Geocoding request failed for city: {}", city, ex);
-            throw ex;
-        }
+        GeocodingResponse geocodingResponse =
+                executeWithRetry(
+                        "geocoding",
+                        city,
+                        () -> restClient.get()
+                                .uri(geocodingUrl)
+                                .retrieve()
+                                .body(GeocodingResponse.class));
 
         if (geocodingResponse == null
                 || geocodingResponse.results() == null
@@ -91,20 +93,14 @@ public class WeatherApiClient {
 
         log.info("Starting forecast request for city: {}", city);
 
-        ForecastResponse forecastResponse;
-
-        try {
-            forecastResponse = restClient.get()
-                    .uri(forecastUrl)
-                    .retrieve()
-                    .body(ForecastResponse.class);
-
-            log.info("Forecast response received for city: {}", city);
-
-        } catch (Exception ex) {
-            log.error("Forecast request failed for city: {}", city, ex);
-            throw ex;
-        }
+        ForecastResponse forecastResponse =
+                executeWithRetry(
+                        "forecast",
+                        city,
+                        () -> restClient.get()
+                                .uri(forecastUrl)
+                                .retrieve()
+                                .body(ForecastResponse.class));
 
         if (forecastResponse == null
                 || forecastResponse.current() == null) {
@@ -120,5 +116,94 @@ public class WeatherApiClient {
                 forecastResponse.latitude(),
                 forecastResponse.longitude(),
                 current);
+    }
+
+    private <T> T executeWithRetry(
+            String operation,
+            String city,
+            ApiCall<T> apiCall) {
+
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                T response = apiCall.execute();
+
+                log.info(
+                        "{} response received for city: {}",
+                        operation,
+                        city);
+
+                return response;
+
+            } catch (ResourceAccessException ex) {
+                log.warn(
+                        "{} connection failed for city {} (attempt {}/{}): {}",
+                        operation,
+                        city,
+                        attempt,
+                        MAX_ATTEMPTS,
+                        ex.getMessage());
+
+                if (attempt == MAX_ATTEMPTS || !isTransientConnectionError(ex)) {
+                    throw ex;
+                }
+
+                pauseBeforeRetry(operation, city);
+
+            } catch (RestClientResponseException ex) {
+                HttpStatusCode status = ex.getStatusCode();
+
+                log.warn(
+                        "{} returned HTTP {} for city {}",
+                        operation,
+                        status.value(),
+                        city);
+
+                if (attempt == MAX_ATTEMPTS
+                        || !status.is5xxServerError()) {
+                    throw ex;
+                }
+
+                pauseBeforeRetry(operation, city);
+            }
+        }
+
+        throw new IllegalStateException(
+                "Unexpected retry termination for " + operation);
+    }
+
+    private boolean isTransientConnectionError(
+            ResourceAccessException exception) {
+
+        Throwable cause = exception;
+
+        while (cause != null) {
+            if (cause instanceof SocketTimeoutException
+                    || cause instanceof ConnectException
+                    || cause instanceof IOException) {
+                return true;
+            }
+
+            cause = cause.getCause();
+        }
+
+        return false;
+    }
+
+    private void pauseBeforeRetry(String operation, String city) {
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+
+            throw new IllegalStateException(
+                    "Retry interrupted for " + operation
+                            + " request for city " + city,
+                    ex);
+        }
+    }
+
+    @FunctionalInterface
+    private interface ApiCall<T> {
+        T execute();
     }
 }
