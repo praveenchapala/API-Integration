@@ -12,47 +12,149 @@
 
   font-optical-sizing: auto;
   font-weight: 400;
+
+  /* Prevent layout from exceeding the viewport */
+  width: 100%;
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
 html {
-  min-width: 320px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 100%;
   scroll-behavior: smooth;
+  overflow-x: clip;
 }
 
 body {
-  min-width: 320px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 100vh;
   margin: 0;
+  overflow-x: clip;
 }
 
 body,
 button,
-input {
+input,
+textarea,
+select {
   font-family: "DM Sans", "Segoe UI", sans-serif;
 }
 
 button,
-input {
+input,
+textarea,
+select {
   font-size: inherit;
 }
 
 button {
   -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+}
+
+img,
+video,
+canvas,
+iframe,
+svg {
+  max-width: 100%;
+}
+
+img,
+video {
+  height: auto;
 }
 
 a {
   color: inherit;
+  overflow-wrap: anywhere;
 }
 
 #root {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 100vh;
   margin: 0;
+}
+
+/* Allow flex and grid children to shrink */
+main,
+section,
+header,
+footer,
+article,
+aside,
+nav,
+div {
+  min-width: 0;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  min-width: 0;
+}
+
+button {
+  max-width: 100%;
+  white-space: normal;
+}
+
+/* Keep long text and API responses within their containers */
+h1,
+h2,
+h3,
+h4,
+p,
+span,
+label {
+  overflow-wrap: break-word;
+}
+
+/* Responsive page gutters */
+.page-container {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+  padding-inline: clamp(16px, 4vw, 48px);
+}
+
+/* Responsive grid helper */
+.responsive-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(12px, 2vw, 24px);
+}
+
+/* Responsive search form helper */
+.search-form {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.search-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-form button {
+  flex-shrink: 0;
 }
 
 ::selection {
@@ -61,11 +163,56 @@ a {
 }
 
 :focus-visible {
-  outline-color: #8fe4df;
+  outline: 2px solid #8fe4df;
+  outline-offset: 3px;
 }
 
-@media (prefers-reduced-motion: reduce) {
+/* Tablet */
+@media (max-width: 768px) {
+  .page-container {
+    padding-inline: 20px;
+  }
+
+  .responsive-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Mobile */
+@media (max-width: 480px) {
   html {
     scroll-behavior: auto;
+  }
+
+  .page-container {
+    padding-inline: 16px;
+  }
+
+  .search-form {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .search-form button {
+    width: 100%;
+  }
+}
+
+/* Small mobile screens */
+@media (max-width: 360px) {
+  .page-container {
+    padding-inline: 12px;
+  }
+}
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
