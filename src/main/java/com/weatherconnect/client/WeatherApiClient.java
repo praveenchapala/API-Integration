@@ -33,14 +33,16 @@ public class WeatherApiClient {
     private static final Logger log =
             LoggerFactory.getLogger(WeatherApiClient.class);
 
-    // Retry only transient connection failures and HTTP 5xx responses.
-    // Do not retry HTTP 429 rate-limit responses.
     private static final int MAX_ATTEMPTS = 2;
     private static final long RETRY_DELAY_MS = 500;
 
-    // Cache entries expire after 10 minutes.
+    // Data is fresh for 10 minutes.
     private static final long CACHE_TTL_MS =
             Duration.ofMinutes(10).toMillis();
+
+    // Expired weather data can be used as fallback for up to 24 hours.
+    private static final long STALE_CACHE_TTL_MS =
+            Duration.ofHours(24).toMillis();
 
     private static final String GEOCODING_URL =
             "https://geocoding-api.open-meteo.com/v1/search";
@@ -80,34 +82,79 @@ public class WeatherApiClient {
         String normalizedCity = city.trim();
         String cityKey = normalizedCity.toLowerCase(Locale.ROOT);
 
-        // Return cached weather when the entry is still valid.
-        WeatherSummary cachedWeather = getCached(
-                weatherCache, cityKey);
+        CacheEntry<WeatherSummary> cachedEntry =
+                weatherCache.get(cityKey);
 
-        if (cachedWeather != null) {
-            log.info("Weather cache hit for city: {}", normalizedCity);
-            return cachedWeather;
+        // Return fresh data without contacting the provider.
+        WeatherSummary freshWeather = getFreshValue(cachedEntry);
+
+        if (freshWeather != null) {
+            log.info("Fresh weather cache hit for city: {}",
+                    normalizedCity);
+            return freshWeather;
         }
 
-        // Reuse previously resolved city coordinates.
-        LocationResult location = getLocation(normalizedCity, cityKey);
+        try {
+            LocationResult location =
+                    getLocation(normalizedCity, cityKey);
 
-        WeatherSummary weather = fetchWeather(location, normalizedCity);
+            WeatherSummary weather =
+                    fetchWeather(location, normalizedCity);
 
-        weatherCache.put(
-                cityKey,
-                new CacheEntry<>(weather, System.currentTimeMillis()));
+            // Store only successful weather responses.
+            weatherCache.put(
+                    cityKey,
+                    new CacheEntry<>(
+                            weather,
+                            System.currentTimeMillis()));
 
-        return weather;
+            return weather;
+
+        } catch (RestClientResponseException ex) {
+            if (isProviderUnavailable(ex)) {
+                WeatherSummary staleWeather =
+                        getStaleValue(cachedEntry);
+
+                if (staleWeather != null) {
+                    log.warn(
+                            "Provider returned HTTP {} for {}. "
+                                    + "Returning cached weather data.",
+                            ex.getStatusCode().value(),
+                            normalizedCity);
+
+                    return staleWeather;
+                }
+            }
+
+            throw ex;
+
+        } catch (ResourceAccessException ex) {
+            WeatherSummary staleWeather =
+                    getStaleValue(cachedEntry);
+
+            if (staleWeather != null) {
+                log.warn(
+                        "Provider connection failed for {}. "
+                                + "Returning cached weather data.",
+                        normalizedCity);
+
+                return staleWeather;
+            }
+
+            throw ex;
+        }
     }
 
     private LocationResult getLocation(String city, String cityKey) {
-        LocationResult cachedLocation = getCached(
-                locationCache, cityKey);
+        CacheEntry<LocationResult> cachedEntry =
+                locationCache.get(cityKey);
 
-        if (cachedLocation != null) {
+        LocationResult freshLocation =
+                getFreshValue(cachedEntry);
+
+        if (freshLocation != null) {
             log.info("Geocoding cache hit for city: {}", city);
-            return cachedLocation;
+            return freshLocation;
         }
 
         String geocodingUrl = UriComponentsBuilder
@@ -140,7 +187,9 @@ public class WeatherApiClient {
 
         locationCache.put(
                 cityKey,
-                new CacheEntry<>(location, System.currentTimeMillis()));
+                new CacheEntry<>(
+                        location,
+                        System.currentTimeMillis()));
 
         return location;
     }
@@ -222,8 +271,8 @@ public class WeatherApiClient {
             } catch (RestClientResponseException ex) {
                 HttpStatusCode status = ex.getStatusCode();
 
-                // Limit the body logged to avoid excessively large log entries.
                 String responseBody = ex.getResponseBodyAsString();
+
                 if (responseBody.length() > 1000) {
                     responseBody = responseBody.substring(0, 1000);
                 }
@@ -236,12 +285,12 @@ public class WeatherApiClient {
                         city,
                         responseBody);
 
-                // Rate limiting is not a transient 5xx error.
-                // Propagate it immediately instead of retrying.
+                // Never retry HTTP 429.
                 if (status.value() == 429) {
                     throw ex;
                 }
 
+                // Retry only HTTP 5xx responses.
                 if (attempt == MAX_ATTEMPTS
                         || !status.is5xxServerError()) {
                     throw ex;
@@ -253,6 +302,15 @@ public class WeatherApiClient {
 
         throw new IllegalStateException(
                 "Unexpected retry termination for " + operation);
+    }
+
+    private boolean isProviderUnavailable(
+            RestClientResponseException exception) {
+
+        int status = exception.getStatusCode().value();
+
+        return status == 429
+                || exception.getStatusCode().is5xxServerError();
     }
 
     private boolean isTransientConnectionError(
@@ -273,9 +331,13 @@ public class WeatherApiClient {
         return false;
     }
 
-    private void pauseBeforeRetry(String operation, String city) {
+    private void pauseBeforeRetry(
+            String operation,
+            String city) {
+
         try {
             Thread.sleep(RETRY_DELAY_MS);
+
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
 
@@ -286,12 +348,7 @@ public class WeatherApiClient {
         }
     }
 
-    private <T> T getCached(
-            Map<String, CacheEntry<T>> cache,
-            String key) {
-
-        CacheEntry<T> entry = cache.get(key);
-
+    private <T> T getFreshValue(CacheEntry<T> entry) {
         if (entry == null) {
             return null;
         }
@@ -302,7 +359,21 @@ public class WeatherApiClient {
             return entry.value();
         }
 
-        cache.remove(key, entry);
+        // Keep expired entries for possible fallback.
+        return null;
+    }
+
+    private <T> T getStaleValue(CacheEntry<T> entry) {
+        if (entry == null) {
+            return null;
+        }
+
+        long age = System.currentTimeMillis() - entry.createdAt();
+
+        if (age >= CACHE_TTL_MS && age < STALE_CACHE_TTL_MS) {
+            return entry.value();
+        }
+
         return null;
     }
 
